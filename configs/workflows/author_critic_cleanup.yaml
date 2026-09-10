@@ -1,4 +1,4 @@
-workflow: proofstack.agents.dag_workflow.DAGWorkflow
+workflow: proofstack.agents.proof_cleanup.AuthorCriticCleanupWorkflow
 description: Run Author/Critic unchanged, edit an accepted proof and bibliography, and review both with a fresh critic.
 
 inputs:
@@ -24,11 +24,12 @@ dag:
       when:
         inputs:
           last_gasp: $node.author_critic.last_gasp
+          error: $node.author_critic.error
           accepted: $node.author_critic.last_critic_accepted
           final_mode: $node.author_critic.final_critic_mode_run
           final_accepted: $node.author_critic.final_critic_answer_ready
         python: |
-          not inputs.get("last_gasp") and (
+          not inputs.get("error") and not inputs.get("last_gasp") and (
               inputs.get("accepted") is True if inputs.get("final_mode") == "not_run"
               else inputs.get("final_mode") == "run" and inputs.get("final_accepted") is True
           )
@@ -42,7 +43,6 @@ dag:
       kind: agent
       needs: [cleanup]
       agent: proofstack.agents.ac.ACCritic
-      soft_fail: true
       inputs:
         answer_tex: $node.cleanup.answer_tex
         references_bib: $node.cleanup.references_bib
@@ -57,17 +57,11 @@ dag:
       default:
         answer_ready: false
 
-    # Preserve the three outputs without invoking the generic last-gasp file writer.
-    - id: budget_fallback
-      kind: if_else
-      run_on: budget_exhausted
-      condition: false
-      else:
-        answer_ready: false
-
   outputs:
     final_critic_answer_ready:
-      coalesce: [$node.budget_fallback.answer_ready, $node.fresh_critic.answer_ready, false]
+      coalesce: [$node.fresh_critic.answer_ready, false]
+    error:
+      coalesce: [$node.author_critic.error, $node.cleanup.error]
     original_proof:
       answer_tex: $node.author_critic.answer_tex
       references_bib: $node.author_critic.references_bib

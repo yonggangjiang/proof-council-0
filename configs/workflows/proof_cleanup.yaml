@@ -1,4 +1,4 @@
-workflow: proofstack.agents.dag_workflow.DAGWorkflow
+workflow: proofstack.agents.proof_cleanup.ProofCleanupWorkflow
 description: Scholarship and writing edits of a proof and bibliography, using the Author/Critic API model.
 
 inputs:
@@ -522,7 +522,6 @@ dag:
       kind: agent
       agent: proofstack.agents.configurable_cli.ConfigurableCLIAgent
       name: proof_files
-      soft_fail: true
       inputs:
         answer_tex:
           coalesce: [$input.answer_tex, $input.solution, $input.problem]
@@ -540,7 +539,6 @@ dag:
       needs: [input_files]
       agent: proofstack.agents.configurable_prompt.ConfigurablePromptAgent
       name: scholarship_audit_editor
-      soft_fail: true
       inputs:
         answer_tex: $node.input_files.answer_tex
         references_bib: $node.input_files.references_bib
@@ -557,7 +555,6 @@ dag:
       needs: [scholarship_audit_edit]
       agent: proofstack.agents.configurable_prompt.ConfigurablePromptAgent
       name: writing_editor
-      soft_fail: true
       inputs:
         answer_tex: $node.scholarship_audit_edit.answer_tex
         references_bib: $node.scholarship_audit_edit.references_bib
@@ -574,7 +571,6 @@ dag:
       needs: [writing_edit]
       agent: proofstack.agents.configurable_cli.ConfigurableCLIAgent
       name: proof_files
-      soft_fail: true
       inputs:
         answer_tex: $node.writing_edit.answer_tex
         references_bib: $node.writing_edit.references_bib
@@ -587,18 +583,26 @@ dag:
         python: bool((inputs.get("proof") or "").strip()) and inputs.get("bib") is not None
       default: *empty_proof
 
-    # Avoid the generic last-gasp writer overwriting the original proof on budget exhaustion.
-    - id: budget_fallback
-      kind: if_else
-      run_on: budget_exhausted
-      condition: false
-      else:
-        status: budget_exhausted
-
   outputs:
     answer_tex: $node.output_files.answer_tex
     references_bib: $node.output_files.references_bib
     answer_tex_path: $node.output_files.answer_tex_path
     references_bib_path: $node.output_files.references_bib_path
     status:
-      coalesce: [$node.budget_fallback.status, $node.output_files.status]
+      coalesce: [$node.output_files.status, error]
+    error:
+      inputs:
+        loaded: $node.input_files.status
+        audited: $node.scholarship_audit_edit.answer_tex
+        audit_bib: $node.scholarship_audit_edit.references_bib
+        written: $node.writing_edit.answer_tex
+        written_bib: $node.writing_edit.references_bib
+        saved: $node.output_files.status
+      python: |
+        "Could not load the proof input files" if inputs.get("loaded") != "done" else (
+            "Scholarship editor did not return both proof files" if not (inputs.get("audited") or "").strip() or inputs.get("audit_bib") is None else (
+                "Writing editor did not return both proof files" if not (inputs.get("written") or "").strip() or inputs.get("written_bib") is None else (
+                    "Could not save the cleaned proof files" if inputs.get("saved") != "done" else None
+                )
+            )
+        )
